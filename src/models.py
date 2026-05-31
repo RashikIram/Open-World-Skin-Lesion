@@ -201,6 +201,33 @@ class GatedFusionHead(nn.Module):
         fused_cls = gate * image_feat + (1.0 - gate) * text_feat
         return self.norm(fused_cls)
 
+class ConcatenationFusionHead(nn.Module):
+    def __init__(self, image_hidden: int, text_hidden: int, fusion_dim: int = 256):
+        super().__init__()
+
+        self.image_proj = nn.Linear(image_hidden, fusion_dim)
+        self.text_proj = nn.Linear(text_hidden, fusion_dim)
+
+        self.fusion = nn.Sequential(
+            nn.Linear(fusion_dim * 2, fusion_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.LayerNorm(fusion_dim),
+        )
+
+    def forward(self, image_tokens, text_tokens, attention_mask=None):
+        image_feat = self.image_proj(image_tokens[:, 0, :])
+        text_feat = self.text_proj(text_tokens[:, 0, :])
+        fused = torch.cat([image_feat, text_feat], dim=1)
+        return self.fusion(fused)
+
+def make_classifier(fusion_dim: int, num_classes: int, dropout: float = 0.3):
+    return nn.Sequential(
+        nn.Linear(fusion_dim, fusion_dim),
+        nn.ReLU(),
+        nn.Dropout(dropout),
+        nn.Linear(fusion_dim, num_classes),
+    )
 
 def make_classifier(fusion_dim: int, num_classes: int, dropout: float = 0.3):
     return nn.Sequential(
@@ -212,7 +239,7 @@ def make_classifier(fusion_dim: int, num_classes: int, dropout: float = 0.3):
 
 
 class TextImageFusionClosedSet(nn.Module):
-    def __init__(self, image_encoder: nn.Module, text_model_name: str, num_classes: int, fusion: Literal["cross_attention", "gated"], fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
+    def __init__(self, image_encoder: nn.Module, text_model_name: str, num_classes: int, fusion: Literal["cross_attention", "gated", "concat"], fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
         super().__init__()
         self.image_encoder = image_encoder
         self.text_encoder = AutoModel.from_pretrained(text_model_name)
@@ -224,6 +251,8 @@ class TextImageFusionClosedSet(nn.Module):
             self.fusion = CrossAttentionFusionHead(image_hidden, text_hidden, fusion_dim, num_heads)
         elif fusion == "gated":
             self.fusion = GatedFusionHead(image_hidden, text_hidden, fusion_dim)
+        elif fusion == "concat":
+            self.fusion = ConcatenationFusionHead(image_hidden, text_hidden, fusion_dim)
         else:
             raise ValueError(f"Unknown fusion type: {fusion}")
         self.classifier = make_classifier(fusion_dim, num_classes)
@@ -247,7 +276,7 @@ class TextImageFusionClosedSet(nn.Module):
 
 
 class TextImageFusionDANNKnownOnly(TextImageFusionClosedSet):
-    def __init__(self, image_encoder: nn.Module, text_model_name: str, num_classes: int, fusion: Literal["cross_attention", "gated"], fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
+    def __init__(self, image_encoder: nn.Module, text_model_name: str, num_classes: int, fusion: Literal["cross_attention", "gated", "concat"], fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
         super().__init__(image_encoder, text_model_name, num_classes, fusion, fusion_dim, num_heads, freeze_backbones)
         self.domain_classifier = make_classifier(fusion_dim, 2)
 
@@ -277,6 +306,26 @@ class ResNet50GatedFusion(TextImageFusionClosedSet):
     def __init__(self, image_model_name: str, text_model_name: str, num_classes: int, fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
         super().__init__(ResNet50Adapter(image_model_name), text_model_name, num_classes, "gated", fusion_dim, num_heads, freeze_backbones)
 
+class MobileViTConcatenationFusion(TextImageFusionClosedSet):
+    def __init__(self, image_model_name, text_model_name, num_classes, fusion_dim=256, num_heads=4, freeze_backbones=False):
+        super().__init__(MobileViTAdapter(image_model_name), text_model_name, num_classes, "concat", fusion_dim, num_heads, freeze_backbones)
+
+
+class MobileViTConcatenationDANNKnownOnly(TextImageFusionDANNKnownOnly):
+    def __init__(self, image_model_name, text_model_name, num_classes, fusion_dim=256, num_heads=4, freeze_backbones=False):
+        super().__init__(MobileViTAdapter(image_model_name), text_model_name, num_classes, "concat", fusion_dim, num_heads, freeze_backbones)
+
+
+class ResNet50ConcatenationFusion(TextImageFusionClosedSet):
+    def __init__(self, image_model_name, text_model_name, num_classes, fusion_dim=256, num_heads=4, freeze_backbones=False):
+        super().__init__(
+            ResNet50Adapter(image_model_name), text_model_name, num_classes, "concat", fusion_dim, num_heads, freeze_backbones)
+
+
+class ResNet50ConcatenationDANNKnownOnly(TextImageFusionDANNKnownOnly):
+    def __init__(self, image_model_name, text_model_name, num_classes, fusion_dim=256, num_heads=4, freeze_backbones=False):
+        super().__init__(
+            ResNet50Adapter(image_model_name), text_model_name, num_classes, "concat", fusion_dim, num_heads, freeze_backbones)
 
 class MobileViTCrossAttentionDANNKnownOnly(TextImageFusionDANNKnownOnly):
     def __init__(self, image_model_name: str, text_model_name: str, num_classes: int, fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
@@ -319,15 +368,24 @@ class ImageOnlyClassifier(nn.Module):
 MODEL_REGISTRY = {
     "mobilevit_cross_attention": MobileViTCrossAttentionFusion,
     "mobilevit_gated": MobileViTGatedFusion,
+    "mobilevit_concat": MobileViTConcatenationFusion,
     "resnet50_cross_attention": ResNet50CrossAttentionFusion,
     "resnet50_gated": ResNet50GatedFusion,
+    "resnet50_concat": ResNet50ConcatenationFusion,
+    "mobilevit_concat": MobileViTConcatenationFusion,
+    "resnet50_concat": ResNet50ConcatenationFusion,
 }
+
 
 DANN_MODEL_REGISTRY = {
     "mobilevit_cross_attention": MobileViTCrossAttentionDANNKnownOnly,
     "mobilevit_gated": MobileViTGatedDANNKnownOnly,
+    "mobilevit_concat": MobileViTConcatenationDANNKnownOnly,
     "resnet50_cross_attention": ResNet50CrossAttentionDANNKnownOnly,
     "resnet50_gated": ResNet50GatedDANNKnownOnly,
+    "resnet50_concat": ResNet50ConcatenationDANNKnownOnly,
+    "mobilevit_concat": MobileViTConcatenationDANNKnownOnly,
+    "resnet50_concat": ResNet50ConcatenationDANNKnownOnly,
 }
 
 
@@ -344,7 +402,13 @@ def build_dann_model(model_family: str, image_model_name: str, text_model_name: 
 
 
 # Backwards-compatible aliases matching the original notebook naming style.
-MobileViTTextFusionClosedSet = MobileViTGatedFusion
-MobileViTDANNKnownOnly = MobileViTGatedDANNKnownOnly
+# The original MobileViT notebook model named MobileViTTextFusionClosedSet
+# is the cross-attention fusion model, not the gated model.
+MobileViTTextFusionClosedSet = MobileViTCrossAttentionFusion
+MobileViTDANNKnownOnly = MobileViTCrossAttentionDANNKnownOnly
+
+# ResNet aliases are kept mapped to the gated ResNet implementation because
+# those aliases are separate from the MobileViT cross-attention notebook names.
 ResNet50TextFusionClosedSet = ResNet50GatedFusion
 ResNet50DANNKnownOnly = ResNet50GatedDANNKnownOnly
+ResNet50ConcatenationFusion = ResNet50ConcatenationFusion
