@@ -6,8 +6,10 @@ The project supports four image-text fusion model families and their DANN versio
 
 1. MobileViT + Cross Attention
 2. MobileViT + Gated Fusion
-3. ResNet50 + Cross Attention
-4. ResNet50 + Gated Fusion
+3. MobileViT + Concatenation
+4. ResNet50 + Cross Attention
+5. ResNet50 + Gated Fusion
+6. ResNet50 + Concatenation
 
 It also supports image-only baselines and three metadata text variants: `text_core`, `text_full`, and `text_missing_explicit`.
 
@@ -18,6 +20,7 @@ skin_lesion_openworld/
 ├── README.md
 ├── requirements.txt
 ├── config.py
+├── demo.ipynb
 ├── src/
 │   ├── preprocessing.py
 │   ├── datasets.py
@@ -30,7 +33,7 @@ skin_lesion_openworld/
 │   ├── visualization.py
 │   └── utils.py
 ├── notebooks/
-│   └── demo_run.ipynb
+│   └── notebooks_related_to_the_steps.ipynb
 └── outputs/
     └── README_outputs.md
 ```
