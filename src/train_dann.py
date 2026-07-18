@@ -37,6 +37,7 @@ from .metrics import (
     predict_open_world_from_threshold,
 )
 from .models import build_dann_model
+from .pcgrad_dann import dann_pcgrad_step  # [Shuvo Edited here]
 from .preprocessing import add_known_unknown_columns, load_standardized_splits
 from .transforms import get_eval_transform, get_train_transform
 from .utils import ensure_dir, get_device, load_model_state, save_checkpoint, seed_everything
@@ -126,6 +127,7 @@ def train_dann_epoch(
     total_epochs: int,
     domain_loss_weight: float = 1.0,
     max_lambda: float = 1.0,
+    use_pcgrad: bool = False,  # [Shuvo Edited here]
 ):
     """
     DANN training epoch aligned with the notebook behaviour.
@@ -147,6 +149,7 @@ def train_dann_epoch(
     total_loss = 0.0
     total_class_loss = 0.0
     total_domain_loss = 0.0
+    total_conflicts = 0  # [Shuvo Edited here]
 
     for local_step, (src, tgt) in enumerate(
         tqdm(zip(source_loader, target_loader), total=n_steps, desc="dann", leave=False)
@@ -181,8 +184,15 @@ def train_dann_epoch(
         domain_labels = torch.cat([src["domain"], tgt["domain"]], dim=0)
         domain_loss = domain_criterion(domain_logits, domain_labels)
 
-        loss = class_loss + domain_loss_weight * domain_loss
-        loss.backward()
+        # [Shuvo Edited here] gradient surgery (asymmetric PCGrad) vs. plain summed backward
+        weighted_domain_loss = domain_loss_weight * domain_loss
+        loss = class_loss + weighted_domain_loss
+        if use_pcgrad:
+            # Deconflict g_cls and g_dom BEFORE they merge; protects classification.
+            stats = dann_pcgrad_step(class_loss, weighted_domain_loss, model)
+            total_conflicts += stats["pcgrad_conflicts"]
+        else:
+            loss.backward()
         optimizer.step()
 
         total_loss += float(loss.item())
@@ -194,6 +204,7 @@ def train_dann_epoch(
         "class_loss": total_class_loss / n_steps,
         "domain_loss": total_domain_loss / n_steps,
         "n_steps": n_steps,
+        "pcgrad_conflicts_per_step": total_conflicts / n_steps,  # [Shuvo Edited here]
     }
 
 
@@ -774,6 +785,7 @@ def run(args):
             total_epochs=args.epochs,
             domain_loss_weight=cfg.domain_loss_weight,
             max_lambda=cfg.dann_lambda_max,
+            use_pcgrad=args.pcgrad,  # [Shuvo Edited here]
         )
 
         val_metrics, _, _, _ = evaluate_closed_set(
@@ -1032,6 +1044,17 @@ def parse_args():
     parser.add_argument("--scheduler-patience", type=int, default=2)
     parser.add_argument("--energy-temperature", type=float, default=1.0)
     parser.add_argument("--skip-openworld", action="store_true")
+
+    # [Shuvo Edited here] enable asymmetric PCGrad gradient surgery on the DANN step
+    parser.add_argument(
+        "--pcgrad",
+        action="store_true",
+        help=(
+            "Deconflict the classification and domain gradients (asymmetric "
+            "PCGrad) before each optimizer step, protecting classification from "
+            "DANN negative transfer. Off by default = original summed-loss DANN."
+        ),
+    )
 
     return parser.parse_args()
 
