@@ -1,0 +1,5 @@
+# pcgrad_dann.py is verified by a SHA256 guard in the runner
+# (EXPECTED_USER_PCGRAD_SHA256). Line-ending translation on checkout would
+# change the file's bytes and make that guard reject it. Pin these files to LF
+# so the hash is identical on every platform.
+* text eol=lf
