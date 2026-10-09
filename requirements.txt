@@ -5,6 +5,7 @@ transformers
 pandas
 numpy
 scikit-learn
+scipy
 matplotlib
 Pillow
 tqdm

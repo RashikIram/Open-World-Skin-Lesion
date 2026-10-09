@@ -108,6 +108,33 @@ class DomainAdaptationDataset(SkinLesionTextImageDataset):
     pass
 
 
+class TwoViewDomainAdaptationDataset(SkinLesionTextImageDataset):
+    """
+    Target loader for UADAL: a weak view (`pixel_values`) and a strong view
+    (`pixel_values_strong`) of the same image, sharing one text encoding.
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        tokenizer,
+        weak_transform,
+        strong_transform,
+        text_col: str,
+        label_col: str = "label_open_id",
+        domain_label: Optional[int] = None,
+        max_text_len: int = 96,
+    ):
+        super().__init__(df, tokenizer, weak_transform, text_col, label_col, domain_label, max_text_len)
+        self.strong_transform = strong_transform
+
+    def __getitem__(self, idx: int):
+        item = super().__getitem__(idx)
+        image = Image.open(self.df.iloc[idx]["image_path"]).convert("RGB")
+        item["pixel_values_strong"] = self.strong_transform(image)
+        return item
+
+
 class OpenWorldDataset(SkinLesionTextImageDataset):
     def __init__(
         self,

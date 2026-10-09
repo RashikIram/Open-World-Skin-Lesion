@@ -287,6 +287,55 @@ class TextImageFusionDANNKnownOnly(TextImageFusionClosedSet):
         return class_logits, domain_logits, fused_cls
 
 
+class UADALDomainDiscriminator(nn.Module):
+    """3-way discriminator (source / target-known / target-unknown) from UADAL's Net_CLS_DC."""
+
+    def __init__(self, in_dim: int, hidden_dim: int = 500, out_dim: int = 3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(hidden_dim, out_dim),
+        )
+        for m in self.net:
+            if isinstance(m, nn.Linear):
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class TextImageFusionUADAL(TextImageFusionClosedSet):
+    """
+    UADAL (Jang et al., NeurIPS 2022) on top of the image-text fusion models.
+
+    - G (feature generator): image encoder + text encoder + fusion head
+    - C: `classifier` with K+1 outputs; index K is "unknown"
+    - E: `open_set_recognizer`, a bias-free K-way linear head whose entropy
+      drives the known/unknown posterior
+    - D: `uadal_domain_classifier`, the 3-way domain discriminator
+
+    forward() returns (known_logits[:, :K], open_logits[:, :K+1], features),
+    so existing closed-set evaluators that read out[0] keep working.
+    """
+
+    def __init__(self, image_encoder: nn.Module, text_model_name: str, num_classes: int, fusion: Literal["cross_attention", "gated", "concat"], fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False, discriminator_hidden: int = 500):
+        super().__init__(image_encoder, text_model_name, num_classes + 1, fusion, fusion_dim, num_heads, freeze_backbones)
+        self.num_known_classes = num_classes
+        self.open_set_recognizer = nn.Linear(fusion_dim, num_classes, bias=False)
+        self.uadal_domain_classifier = UADALDomainDiscriminator(fusion_dim, discriminator_hidden, 3)
+
+    def forward(self, pixel_values, input_ids, attention_mask):
+        fused_cls = self.extract_features(pixel_values, input_ids, attention_mask)
+        open_logits = self.classifier(fused_cls)
+        return open_logits[:, : self.num_known_classes], open_logits, fused_cls
+
+    def reset_open_set_recognizer(self):
+        self.open_set_recognizer.reset_parameters()
+
+
 class MobileViTCrossAttentionFusion(TextImageFusionClosedSet):
     def __init__(self, image_model_name: str, text_model_name: str, num_classes: int, fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
         super().__init__(MobileViTAdapter(image_model_name), text_model_name, num_classes, "cross_attention", fusion_dim, num_heads, freeze_backbones)
@@ -399,6 +448,21 @@ def build_model(model_family: str, image_model_name: str, text_model_name: str, 
 def build_dann_model(model_family: str, image_model_name: str, text_model_name: str, num_classes: int, fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False):
     cls = DANN_MODEL_REGISTRY[model_family]
     return cls(image_model_name, text_model_name, num_classes, fusion_dim, num_heads, freeze_backbones)
+
+
+UADAL_FAMILY_SPECS = {
+    "mobilevit_cross_attention": (MobileViTAdapter, "cross_attention"),
+    "mobilevit_gated": (MobileViTAdapter, "gated"),
+    "mobilevit_concat": (MobileViTAdapter, "concat"),
+    "resnet50_cross_attention": (ResNet50Adapter, "cross_attention"),
+    "resnet50_gated": (ResNet50Adapter, "gated"),
+    "resnet50_concat": (ResNet50Adapter, "concat"),
+}
+
+
+def build_uadal_model(model_family: str, image_model_name: str, text_model_name: str, num_classes: int, fusion_dim: int = 256, num_heads: int = 4, freeze_backbones: bool = False, discriminator_hidden: int = 500):
+    adapter_cls, fusion = UADAL_FAMILY_SPECS[model_family]
+    return TextImageFusionUADAL(adapter_cls(image_model_name), text_model_name, num_classes, fusion, fusion_dim, num_heads, freeze_backbones, discriminator_hidden)
 
 
 # Backwards-compatible aliases matching the original notebook naming style.

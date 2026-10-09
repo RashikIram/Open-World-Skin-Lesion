@@ -469,6 +469,36 @@ def compute_open_world_metrics(
     return metrics
 
 
+def compute_os_star_hos(y_open_true, y_open_pred, unknown_id: int) -> dict:
+    """OS* (mean per-known-class recall), UNK (unknown recall) and HOS.
+
+    Follows the UADAL / OSDA convention: a known sample predicted as unknown
+    counts as an error for OS*, and HOS is the harmonic mean of OS* and UNK.
+    """
+
+    y_open_true = np.asarray(y_open_true)
+    y_open_pred = np.asarray(y_open_pred)
+
+    known_recalls = [
+        float(np.mean(y_open_pred[y_open_true == c] == c))
+        for c in np.unique(y_open_true)
+        if c != unknown_id
+    ]
+    os_star = float(np.mean(known_recalls)) if known_recalls else np.nan
+
+    unknown_mask = y_open_true == unknown_id
+    unk = float(np.mean(y_open_pred[unknown_mask] == unknown_id)) if unknown_mask.any() else np.nan
+
+    if np.isnan(os_star) or np.isnan(unk):
+        hos = np.nan
+    elif os_star + unk == 0:
+        hos = 0.0
+    else:
+        hos = 2.0 * os_star * unk / (os_star + unk)
+
+    return {"os_star": os_star, "unk": unk, "hos": hos}
+
+
 # ============================================================
 # Report / output helpers used by training and evaluation scripts
 # ============================================================
