@@ -48,6 +48,28 @@ def get_train_transform(image_size: int = 224):
     ])
 
 
+def get_weak_train_transform(image_size: int = 224):
+    """UADAL weak target view: resize, random crop, horizontal flip."""
+    return transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.RandomCrop(image_size),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=IMAGENET_MEAN,
+            std=IMAGENET_STD,
+        ),
+    ])
+
+
+def get_strong_target_transform(image_size: int = 224):
+    """UADAL strong target view: RandAugment(1 op, magnitude 2) + eval pipeline."""
+    return transforms.Compose([
+        transforms.RandAugment(num_ops=1, magnitude=2),
+        get_eval_transform(image_size),
+    ])
+
+
 def get_eval_transform(image_size: int = 224):
     return transforms.Compose([
         transforms.Resize((256, 256)),
